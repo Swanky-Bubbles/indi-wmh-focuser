@@ -1,5 +1,6 @@
 #include "byj48motor.h"
-#include <wiringPi.h>
+#include <lgpio.h>
+#include <thread>
 #include <iostream>
 
 BYJ48Motor::BYJ48Motor(int pin1_, int pin2_, int pin3_, int pin4_)
@@ -9,10 +10,18 @@ BYJ48Motor::BYJ48Motor(int pin1_, int pin2_, int pin3_, int pin4_)
     pins[2] = pin3_;
     pins[3] = pin4_;
 
-    wiringPiSetupGpio();
+    // Open lgpio chip handle
+    lgHandle = lgGpiochipOpen(0);
+    if (lgHandle < 0) {
+        std::cerr << "Failed to open lgpio chip" << std::endl;
+        throw std::runtime_error("lgpio init failed");
+    }
+
     for (int i = 0; i < 4; i++) {
-        pinMode(pins[i], OUTPUT);
-        digitalWrite(pins[i], 0);
+        if (lgGpioClaimOutput(lgHandle, pins[i], 0) != 0) {
+            std::cerr << "Failed to claim GPIO " << pins[i] << std::endl;
+            throw std::runtime_error("lgpio claim failed");
+        }
     }
 
     currentStep = 0;
@@ -20,6 +29,7 @@ BYJ48Motor::BYJ48Motor(int pin1_, int pin2_, int pin3_, int pin4_)
     stepsPerRev = 2048;
     stepDelayMs = 5;
 
+    // 8-step half-step sequence
     stepSequence = {
         {1,0,0,0},
         {1,1,0,0},
@@ -34,8 +44,9 @@ BYJ48Motor::BYJ48Motor(int pin1_, int pin2_, int pin3_, int pin4_)
 
 void BYJ48Motor::singleStep(int stepIndex)
 {
-    for (int i = 0; i < 4; i++)
-        digitalWrite(pins[i], stepSequence[stepIndex][i]);
+    for (int i = 0; i < 4; i++) {
+        lgGpioWrite(lgHandle, pins[i], stepSequence[stepIndex][i]);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(stepDelayMs));
 }
 
@@ -59,4 +70,13 @@ void BYJ48Motor::moveTo(int pos)
 int BYJ48Motor::getPosition() const
 {
     return position;
+}
+
+BYJ48Motor::~BYJ48Motor()
+{
+    // Release GPIOs
+    for (int i = 0; i < 4; i++) {
+        lgGpioClaimRelease(lgHandle, pins[i]);
+    }
+    lgGpiochipClose(lgHandle);
 }
